@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { GAME_DATA } from './constants';
-import { Placements } from './types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ALL_QUESTIONS } from './constants';
+import { GameItem, Placements } from './types';
 import QuestionRow from './components/QuestionRow';
 import AnswerTile from './components/AnswerTile';
 import ResultModal from './components/ResultModal';
@@ -8,15 +8,35 @@ import ResultModal from './components/ResultModal';
 const App: React.FC = () => {
   // State
   const [hasStarted, setHasStarted] = useState(false);
+  const [activeQuestions, setActiveQuestions] = useState<GameItem[]>([]);
+  const [shuffledAnswers, setShuffledAnswers] = useState<{id: string, content: string}[]>([]);
   const [placements, setPlacements] = useState<Placements>({});
   const [timer, setTimer] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [score, setScore] = useState(0);
   const [selectedAnswerId, setSelectedAnswerId] = useState<string | null>(null);
-  const [shuffledAnswers, setShuffledAnswers] = useState(() => 
-    [...GAME_DATA].sort(() => Math.random() - 0.5).map(item => ({ id: item.id, content: item.answer }))
-  );
+
+  // Initialize a round of 10 random questions
+  const generateNewRound = useCallback(() => {
+    // Randomly sort all questions and pick first 10
+    const shuffledQuestions = [...ALL_QUESTIONS].sort(() => Math.random() - 0.5);
+    const selectedQuestions = shuffledQuestions.slice(0, 10);
+    
+    // Set active questions
+    setActiveQuestions(selectedQuestions);
+    
+    // Create answer tiles from the selected questions and shuffle them
+    const answers = selectedQuestions.map(item => ({ id: item.id, content: item.answer }));
+    setShuffledAnswers(answers.sort(() => Math.random() - 0.5));
+    
+    // Reset game state
+    setPlacements({});
+    setTimer(0);
+    setIsFinished(false);
+    setScore(0);
+    setSelectedAnswerId(null);
+  }, []);
 
   // Timer Logic
   useEffect(() => {
@@ -36,6 +56,7 @@ const App: React.FC = () => {
   };
 
   const startGame = () => {
+    generateNewRound(); // Generate questions when user actually starts
     setHasStarted(true);
     setIsPlaying(true);
   };
@@ -95,12 +116,29 @@ const App: React.FC = () => {
     }));
   };
 
+  const getAnswerContent = (id: string) => {
+    // Find answer in the shuffled pool
+    const ans = shuffledAnswers.find(a => a.id === id);
+    if (ans) return ans.content;
+    
+    // If not found (shouldn't happen), fallback to searching ALL_QUESTIONS
+    const q = ALL_QUESTIONS.find(q => q.id === id);
+    return q ? q.answer : '';
+  };
+
   const checkAnswers = () => {
     let currentScore = 0;
-    GAME_DATA.forEach(item => {
+    activeQuestions.forEach(item => {
       const placedAnswerId = placements[item.id];
-      if (placedAnswerId === item.id) {
-        currentScore++;
+      
+      // IMPROVED CHECK LOGIC:
+      // Compare the CONTENT of the placed answer with the expected answer.
+      // This allows interchangeable answers (e.g., if two questions have answer "1/2", either tile works).
+      if (placedAnswerId) {
+        const placedContent = getAnswerContent(placedAnswerId);
+        if (placedContent === item.answer) {
+          currentScore++;
+        }
       }
     });
     setScore(currentScore);
@@ -108,12 +146,8 @@ const App: React.FC = () => {
   };
 
   const resetGame = () => {
-    setPlacements({});
-    setTimer(0);
-    setIsFinished(false);
+    generateNewRound();
     setIsPlaying(true);
-    setShuffledAnswers([...GAME_DATA].sort(() => Math.random() - 0.5).map(item => ({ id: item.id, content: item.answer })));
-    setSelectedAnswerId(null);
   };
 
   // Derived state
@@ -201,19 +235,33 @@ const App: React.FC = () => {
           {/* Left Panel: Questions List (Scrollable) */}
           <main className="flex-1 overflow-y-auto p-3 custom-scrollbar">
              <div className="space-y-1">
-               {GAME_DATA.map((item) => (
-                 <QuestionRow
-                   key={item.id}
-                   item={item}
-                   placedAnswerId={placements[item.id] || null}
-                   getAnswerContent={(id) => GAME_DATA.find(d => d.id === id)?.answer || ''}
-                   onDrop={handleDropOnSlot}
-                   onSlotClick={handleSlotClick}
-                   onRemove={handleRemoveFromSlot}
-                   isCorrect={isFinished ? (placements[item.id] === item.id) : null}
-                   isHighlighted={!!selectedAnswerId}
-                 />
-               ))}
+               {activeQuestions.map((item) => {
+                 // Calculate if this row is correct for the visual check
+                 let isRowCorrect: boolean | null = null;
+                 if (isFinished) {
+                   const placedId = placements[item.id];
+                   if (placedId) {
+                      const content = getAnswerContent(placedId);
+                      isRowCorrect = (content === item.answer);
+                   } else {
+                     isRowCorrect = false;
+                   }
+                 }
+
+                 return (
+                   <QuestionRow
+                     key={item.id}
+                     item={item}
+                     placedAnswerId={placements[item.id] || null}
+                     getAnswerContent={getAnswerContent}
+                     onDrop={handleDropOnSlot}
+                     onSlotClick={handleSlotClick}
+                     onRemove={handleRemoveFromSlot}
+                     isCorrect={isRowCorrect}
+                     isHighlighted={!!selectedAnswerId}
+                   />
+                 );
+               })}
                {/* Spacer to allow scrolling past bottom */}
                <div className="h-20 md:h-0"></div>
              </div>
@@ -258,7 +306,7 @@ const App: React.FC = () => {
       {isFinished && (
         <ResultModal 
           score={score} 
-          total={GAME_DATA.length} 
+          total={activeQuestions.length} 
           time={timer} 
           onReset={resetGame} 
         />
